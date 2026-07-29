@@ -1,0 +1,16 @@
+{
+  "name": "meanop-bot",
+  "version": "1.0.0",
+  "description": "CLI-based Telegram Chatbot integrating with CLI Proxy API",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "dotenv": "^16.4.5",
+    "picocolors": "^1.1.1",
+    "telegraf": "^4.16.3"
+  }
+}
