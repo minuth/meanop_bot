@@ -1,11 +1,13 @@
 {
   "name": "meanop-bot",
   "version": "1.0.0",
-  "description": "CLI-based Telegram Chatbot integrating with CLI Proxy API",
+  "description": "Standalone AI Telegram Chatbot with embedded Google Antigravity engine",
   "main": "src/index.js",
   "type": "module",
   "scripts": {
-    "start": "node src/index.js"
+    "start": "node src/index.js",
+    "login": "node scripts/login.js",
+    "set-webhook": "node scripts/setWebhook.js"
   },
   "dependencies": {
     "commander": "^12.1.0",

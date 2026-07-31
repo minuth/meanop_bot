@@ -1,71 +1,54 @@
+import { getValidAuth, openAIToAntigravity, antigravityToOpenAIJSON, fetchAvailableModels, CONFIG } from './antigravity.js';
+
 /**
- * Client for communicating with the CLI Proxy API.
+ * Embedded AI Client for direct communication with Google Antigravity API.
  */
 export class ProxyClient {
   /**
    * @param {object} config
-   * @param {string} config.proxyUrl Base URL of the CLI Proxy (e.g., http://localhost:8317/v1)
-   * @param {string} config.proxyKey API Key for proxy authentication
+   * @param {string} [config.refreshToken] Refresh token for Antigravity OAuth
+   * @param {string} [config.proxyUrl] Display URL / label
    * @param {string} config.model Default AI model to use
    * @param {string} config.systemPrompt Default system instructions
    */
-  constructor({ proxyUrl, proxyKey, model, systemPrompt }) {
-    this.proxyUrl = proxyUrl.replace(/\/$/, ''); // Remove trailing slash if any
-    this.proxyKey = proxyKey;
+  constructor({ refreshToken, proxyUrl, model, systemPrompt }) {
+    this.refreshToken = refreshToken;
+    this.proxyUrl = proxyUrl || 'Embedded Antigravity API (Direct)';
     this.model = model;
     this.systemPrompt = systemPrompt;
   }
 
   /**
-   * Gets headers required for Proxy API calls.
-   * @returns {object}
-   */
-  _getHeaders() {
-    return {
-      'Authorization': `Bearer ${this.proxyKey}`,
-      'Content-Type': 'application/json'
-    };
-  }
-
-  /**
-   * Fetches the list of available models from the proxy.
+   * Fetches the list of available models from Google Antigravity API.
    * @returns {Promise<Array<object>>} List of model objects
    */
   async fetchModels() {
-    const url = `${this.proxyUrl}/models`;
+    if (!this.refreshToken) return [];
     try {
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: this._getHeaders()
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Proxy returned status ${response.status}: ${errorText}`);
-      }
-
-      const data = await response.json();
-      return data.data || [];
+      const { accessToken } = await getValidAuth(this.refreshToken);
+      return await fetchAvailableModels(accessToken);
     } catch (err) {
-      throw new Error(`Failed to fetch models from proxy: ${err.message}`);
+      throw new Error(`Failed to fetch models: ${err.message}`);
     }
   }
 
   /**
-   * Sends a chat prompt along with history to the proxy API completions endpoint.
+   * Sends a chat prompt along with history to Google Antigravity API directly.
    * @param {Array<{role: string, content: string}>} history Chat history messages
-   * @param {string} userPrompt The latest prompt from the user
-   * @param {string} [overrideModel] Optional model to override the default
+   * @param {string|Array} userPrompt The latest prompt from the user
+   * @param {string} [overrideModel] Optional model to override default
    * @param {string} [systemPromptOverride] Optional system prompt override
    * @returns {Promise<{content: string, usage: object, model: string}>}
    */
   async getChatCompletion(history, userPrompt, overrideModel = null, systemPromptOverride = null) {
-    const url = `${this.proxyUrl}/chat/completions`;
-    const selectedModel = overrideModel || this.model;
+    if (!this.refreshToken) {
+      throw new Error('Missing ANTIGRAVITY_REFRESH_TOKEN. Please configure it in your .env file or auths/antigravity.json');
+    }
 
-    // Build the messages array with system prompt first
-    const messages = [];
+    const selectedModel = overrideModel || this.model;
     const activeSystemPrompt = systemPromptOverride !== null ? systemPromptOverride : this.systemPrompt;
+
+    const messages = [];
     if (activeSystemPrompt) {
       messages.push({
         role: 'system',
@@ -73,56 +56,39 @@ export class ProxyClient {
       });
     }
 
-    // Append chat history
     messages.push(...history);
-
-    // Append current user message
     messages.push({
       role: 'user',
       content: userPrompt
     });
 
-    const body = {
-      model: selectedModel,
-      messages: messages
-    };
-
-    if (selectedModel.toLowerCase().includes('gemini')) {
-      body.tools = [
-        {
-          google_search: {}
-        }
-      ];
-    }
-
     try {
-      const response = await fetch(url, {
+      const { accessToken, projectId } = await getValidAuth(this.refreshToken);
+      const payload = openAIToAntigravity({ model: selectedModel, messages }, projectId);
+
+      if (selectedModel.toLowerCase().includes('gemini')) {
+        payload.request.tools = [{ google_search: {} }];
+      }
+
+      const res = await fetch(`${CONFIG.BASE_URL}${CONFIG.GENERATE_CONTENT_PATH}`, {
         method: 'POST',
-        headers: this._getHeaders(),
-        body: JSON.stringify(body)
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': 'application/json',
+          'User-Agent': CONFIG.USER_AGENT
+        },
+        body: JSON.stringify(payload)
       });
 
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Proxy error (${response.status}): ${errorText}`);
+      if (!res.ok) {
+        const errorText = await res.text();
+        throw new Error(`Antigravity API error (${res.status}): ${errorText}`);
       }
 
-      const result = await response.json();
-      
-      if (!result.choices || result.choices.length === 0) {
-        throw new Error('Proxy returned empty choices in response.');
-      }
-
-      const assistantMessage = result.choices[0].message;
-      const content = assistantMessage ? assistantMessage.content : '';
-      
-      return {
-        content: content,
-        usage: result.usage || { completion_tokens: 0, prompt_tokens: 0, total_tokens: 0 },
-        model: result.model || selectedModel
-      };
+      const rawData = await res.json();
+      return antigravityToOpenAIJSON(rawData, selectedModel);
     } catch (err) {
-      throw new Error(`CLI Proxy API request failed: ${err.message}`);
+      throw new Error(`AI API request failed: ${err.message}`);
     }
   }
 }

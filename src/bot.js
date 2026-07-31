@@ -132,14 +132,18 @@ function getSystemPromptForLevel(level) {
  * @param {string} options.systemPrompt Default system instructions
  * @returns {Telegraf} Telegraf bot instance
  */
-export function createBot({ telegramToken, proxyUrl, proxyKey, model, systemPrompt, allowedUsers, boss }) {
+export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, model, systemPrompt, allowedUsers, boss }) {
   if (!telegramToken) {
     throw new Error('Telegram Bot Token is required to start the bot. Please configure it in .env or provide via --token CLI option.');
   }
 
+  if (!boss) {
+    throw new Error('BOSS is required. Please configure the BOSS environment variable with your Telegram username.');
+  }
+
   const bot = new Telegraf(telegramToken);
   const sessionManager = new SessionManager({ maxHistoryLength: 20 });
-  const proxyClient = new ProxyClient({ proxyUrl, proxyKey, model, systemPrompt });
+  const proxyClient = new ProxyClient({ refreshToken, proxyUrl, proxyKey, model, systemPrompt });
 
   // Middleware to restrict access to allowed users if specified
   if (allowedUsers && allowedUsers.length > 0) {
