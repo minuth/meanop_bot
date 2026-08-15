@@ -2,6 +2,7 @@ import { Telegraf } from 'telegraf';
 import pc from 'picocolors';
 import { SessionManager } from './sessionManager.js';
 import { ProxyClient } from './proxyClient.js';
+import { generateTTS } from './ttsService.js';
 
 /**
  * Downloads a Telegram photo and returns its Base64 representation and MIME type.
@@ -249,6 +250,7 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
       helpMsg = 
         `*ជំនួយសម្រាប់លោក Boss:*\n\n` +
         `• *ការជជែក:* គ្រាន់តែវាយសារផ្ញើមកខ្ញុំ។ ខ្ញុំនឹងចងចាំប្រវត្តិនៃការសន្ទនារបស់លោក។\n` +
+        `• *ឆ្លើយតបជាសំឡេង (TTS):* បញ្ចូល pattern \`vo:\` ក្នុងសារ (ឧទាហរណ៍៖ \`vo: ជម្រាបសួរ\`) ដើម្បីទទួលបានការឆ្លើយតបជាសំឡេង (Gemini 3.1 Flash TTS)។\n` +
         `• */reset:* លុបប្រវត្តិនៃការសន្ទនាកន្លងមកដើម្បីចាប់ផ្តើមថ្មី។\n` +
         `• */model:* បង្ហាញម៉ូដែលបច្ចុប្បន្ន ឬវាយ \`/model <model_name>\` ដើម្បីប្តូរ។\n` +
         `• */behavior:* កំណត់ ឬប្តូរឥរិយាបថ (system prompt) របស់ Bot (ឧទាហរណ៍៖ \`/behavior normal\`)។\n` +
@@ -258,6 +260,7 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
       helpMsg = 
         `*Need help? here are the commands you can use:*\n\n` +
         `• *Chatting:* Send text, photos, or voice messages directly. I will remember up to 20 messages of context in our conversation.\n` +
+        `• *Voice Reply (TTS):* Include \`vo:\` in your message (e.g., \`vo: Hello!\`) to receive a voice response generated via Gemini 3.1 Flash TTS.\n` +
         `• */reset:* Clears our conversation history so we can start fresh.\n` +
         `• */model:* Displays the currently active model. To change the model, type \`/model <model_name>\` (e.g. \`/model gemini-3.5-flash-low\`).\n` +
         `• */status:* Shows configuration details, such as the Proxy URL, current model, and count of messages in your active session history.\n` +
@@ -430,6 +433,15 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
       }
     }
 
+    // Check if user requested voice response via vo: pattern
+    const isVoiceRequested = /^vo:\s*/i.test(userPrompt) || /\bvo:\s*/i.test(userPrompt);
+    if (isVoiceRequested) {
+      userPrompt = userPrompt.replace(/^vo:\s*/i, '').replace(/\bvo:\s*/i, '').trim();
+      if (!userPrompt) {
+        userPrompt = 'Please introduce yourself briefly.';
+      }
+    }
+
     // Check if the message is a set-level request
     const levelMatch = userPrompt.match(/set-level:\s*([0-5])/i);
     if (levelMatch) {
@@ -546,16 +558,28 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
       sessionManager.addMessage(chatId, 'user', historyUserText);
       sessionManager.addMessage(chatId, 'assistant', result.content);
 
-      // Send reply (as a reply to the user if in a group)
+      // Send reply (as voice note if vo: pattern was matched, or text otherwise)
       const replyOptions = isGroup ? { reply_to_message_id: ctx.message.message_id } : {};
-      await ctx.reply(result.content, replyOptions);
+
+      if (isVoiceRequested) {
+        try {
+          await ctx.sendChatAction('record_voice');
+          const audioBuffer = await generateTTS(result.content, null, refreshToken);
+          await ctx.replyWithVoice({ source: audioBuffer, filename: 'voice.ogg' }, replyOptions);
+        } catch (ttsErr) {
+          console.error(`${pc.red('Error generating voice TTS reply:')}`, ttsErr);
+          await ctx.reply(result.content, replyOptions);
+        }
+      } else {
+        await ctx.reply(result.content, replyOptions);
+      }
 
       // Print response to terminal console
       const promptTok = result.usage.prompt_tokens;
       const compTok = result.usage.completion_tokens;
       console.log(
         `${pc.gray(`[${new Date().toLocaleTimeString()}]`)} ` +
-        `${pc.blue('🤖 Reply:')} Model=${pc.cyan(result.model)} ` +
+        `${pc.blue(`🤖 Reply${isVoiceRequested ? ' (Voice TTS)' : ''}:`)} Model=${pc.cyan(result.model)} ` +
         `Tokens=${pc.gray(`${promptTok}p+${compTok}c=${result.usage.total_tokens}`)}`
       );
     } catch (err) {
@@ -597,6 +621,12 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
       if (isMentioned) {
         caption = caption.replace(new RegExp(mention, 'gi'), '').trim();
       }
+    }
+
+    // Check if user requested voice response via vo: pattern
+    const isVoiceRequested = /^vo:\s*/i.test(caption) || /\bvo:\s*/i.test(caption);
+    if (isVoiceRequested) {
+      caption = caption.replace(/^vo:\s*/i, '').replace(/\bvo:\s*/i, '').trim();
     }
 
     // Check if the caption is a set-level request
@@ -644,8 +674,8 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
     const overrideModel = sessionManager.getCustomModel(chatId);
     const activeModel = overrideModel || proxyClient.model;
 
-    // Show typing state to the user
-    await ctx.sendChatAction('typing');
+    // Show typing or voice recording state to the user
+    await ctx.sendChatAction(isVoiceRequested ? 'record_voice' : 'typing');
 
     try {
       // Download the photo and convert it to Base64
@@ -697,16 +727,28 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
       sessionManager.addMessage(chatId, 'user', historyUserText);
       sessionManager.addMessage(chatId, 'assistant', result.content);
 
-      // Send reply (as a reply to the user if in a group)
+      // Send reply (as voice note if vo: pattern was matched, or text otherwise)
       const replyOptions = isGroup ? { reply_to_message_id: ctx.message.message_id } : {};
-      await ctx.reply(result.content, replyOptions);
+
+      if (isVoiceRequested) {
+        try {
+          await ctx.sendChatAction('record_voice');
+          const audioBuffer = await generateTTS(result.content, null, refreshToken);
+          await ctx.replyWithVoice({ source: audioBuffer, filename: 'voice.ogg' }, replyOptions);
+        } catch (ttsErr) {
+          console.error(`${pc.red('Error generating photo voice TTS reply:')}`, ttsErr);
+          await ctx.reply(result.content, replyOptions);
+        }
+      } else {
+        await ctx.reply(result.content, replyOptions);
+      }
 
       // Print response to terminal console
       const promptTok = result.usage.prompt_tokens;
       const compTok = result.usage.completion_tokens;
       console.log(
         `${pc.gray(`[${new Date().toLocaleTimeString()}]`)} ` +
-        `${pc.blue('🤖 Reply (Photo):')} Model=${pc.cyan(result.model)} ` +
+        `${pc.blue(`🤖 Reply (Photo${isVoiceRequested ? ' Voice TTS' : ''}):`)} Model=${pc.cyan(result.model)} ` +
         `Tokens=${pc.gray(`${promptTok}p+${compTok}c=${result.usage.total_tokens}`)}`
       );
     } catch (err) {
@@ -730,11 +772,12 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
     const isBoss = boss && senderUsername === boss;
     const isCreator = senderUsername === 'minuthp' || (ctx.from.first_name || '').toLowerCase() === 'minuth';
 
-    // In group chats, process voice/audio messages if allowed
+    // In group chats, only process voice/audio messages if mentioned, replying to bot, or containing vo: pattern
     if (isGroup) {
       const botUsername = ctx.me || (ctx.botInfo && ctx.botInfo.username) || '';
       const mention = botUsername ? `@${botUsername}` : '';
-      const isMentioned = mention ? caption.includes(mention) : false;
+      const isMentioned = mention && caption ? caption.includes(mention) : false;
+      const hasVoPattern = /^vo:\s*/i.test(caption) || /\bvo:\s*/i.test(caption);
       
       const isReplyToBot = 
         ctx.message.reply_to_message && 
@@ -743,8 +786,8 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
         ((botUsername && ctx.message.reply_to_message.from.username === botUsername) || 
          (ctx.botInfo && ctx.message.reply_to_message.from.id === ctx.botInfo.id));
 
-      // If a text caption is provided (e.g. for audio files) and explicitly mentions someone else, skip
-      if (caption && mention && !isMentioned && !isReplyToBot) {
+      if (!isMentioned && !isReplyToBot && !hasVoPattern) {
+        // Silence: voice/audio message in group was not addressed to the bot
         return;
       }
 
@@ -752,6 +795,12 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
       if (isMentioned) {
         caption = caption.replace(new RegExp(mention, 'gi'), '').trim();
       }
+    }
+
+    // Check if user requested voice response via vo: pattern
+    const isVoiceRequested = /^vo:\s*/i.test(caption) || /\bvo:\s*/i.test(caption);
+    if (isVoiceRequested) {
+      caption = caption.replace(/^vo:\s*/i, '').replace(/\bvo:\s*/i, '').trim();
     }
 
     // Check if the caption is a set-level request
@@ -799,8 +848,8 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
     const overrideModel = sessionManager.getCustomModel(chatId);
     const activeModel = overrideModel || proxyClient.model;
 
-    // Show typing state to the user
-    await ctx.sendChatAction('typing');
+    // Show typing or voice recording state to the user
+    await ctx.sendChatAction(isVoiceRequested ? 'record_voice' : 'typing');
 
     try {
       // Download the audio/voice file and convert it to Base64
@@ -855,9 +904,21 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
       sessionManager.addMessage(chatId, 'user', historyUserText);
       sessionManager.addMessage(chatId, 'assistant', result.content);
 
-      // Send reply (as a reply to the user if in a group)
+      // Send reply (as voice note if vo: pattern was matched, or text otherwise)
       const replyOptions = isGroup ? { reply_to_message_id: ctx.message.message_id } : {};
-      await ctx.reply(result.content, replyOptions);
+
+      if (isVoiceRequested) {
+        try {
+          await ctx.sendChatAction('record_voice');
+          const audioBuffer = await generateTTS(result.content, null, refreshToken);
+          await ctx.replyWithVoice({ source: audioBuffer, filename: 'voice.ogg' }, replyOptions);
+        } catch (ttsErr) {
+          console.error(`${pc.red(`Error generating ${isVoice ? 'voice' : 'audio'} voice TTS reply:`)}`, ttsErr);
+          await ctx.reply(result.content, replyOptions);
+        }
+      } else {
+        await ctx.reply(result.content, replyOptions);
+      }
 
       // Print response to terminal console
       const promptTok = result.usage.prompt_tokens;
@@ -865,7 +926,7 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
       const mediaTypeLabel = isVoice ? 'Voice' : 'Audio';
       console.log(
         `${pc.gray(`[${new Date().toLocaleTimeString()}]`)} ` +
-        `${pc.blue(`🤖 Reply (${mediaTypeLabel}):`)} Model=${pc.cyan(result.model)} ` +
+        `${pc.blue(`🤖 Reply (${mediaTypeLabel}${isVoiceRequested ? ' Voice TTS' : ''}):`)} Model=${pc.cyan(result.model)} ` +
         `Tokens=${pc.gray(`${promptTok}p+${compTok}c=${result.usage.total_tokens}`)}`
       );
     } catch (err) {
