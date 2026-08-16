@@ -142,7 +142,7 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
     throw new Error('BOSS is required. Please configure the BOSS environment variable with your Telegram username.');
   }
 
-  const bot = new Telegraf(telegramToken);
+  const bot = new Telegraf(telegramToken, { handlerTimeout: 180000 });
   const sessionManager = new SessionManager({ maxHistoryLength: 20 });
   const proxyClient = new ProxyClient({ refreshToken, proxyUrl, proxyKey, model, systemPrompt });
 
@@ -250,7 +250,7 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
       helpMsg = 
         `*ជំនួយសម្រាប់លោក Boss:*\n\n` +
         `• *ការជជែក:* គ្រាន់តែវាយសារផ្ញើមកខ្ញុំ។ ខ្ញុំនឹងចងចាំប្រវត្តិនៃការសន្ទនារបស់លោក។\n` +
-        `• *ឆ្លើយតបជាសំឡេង (TTS):* បញ្ចូល pattern \`vo:\` ក្នុងសារ (ឧទាហរណ៍៖ \`vo: ជម្រាបសួរ\`) ដើម្បីទទួលបានការឆ្លើយតបជាសំឡេង (Gemini 3.1 Flash TTS)។\n` +
+        `• *ឆ្លើយតបជាសំឡេង (TTS):* បញ្ចូល pattern \`vo:\` ក្នុងសារ (ឧទាហរណ៍៖ \`vo: ជម្រាបសួរ\`) ដើម្បីទទួលបានការឆ្លើយតបជាសំឡេង (Gemini 2.5 Flash Native Audio Dialog)។\n` +
         `• */reset:* លុបប្រវត្តិនៃការសន្ទនាកន្លងមកដើម្បីចាប់ផ្តើមថ្មី។\n` +
         `• */model:* បង្ហាញម៉ូដែលបច្ចុប្បន្ន ឬវាយ \`/model <model_name>\` ដើម្បីប្តូរ។\n` +
         `• */behavior:* កំណត់ ឬប្តូរឥរិយាបថ (system prompt) របស់ Bot (ឧទាហរណ៍៖ \`/behavior normal\`)។\n` +
@@ -260,7 +260,7 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
       helpMsg = 
         `*Need help? here are the commands you can use:*\n\n` +
         `• *Chatting:* Send text, photos, or voice messages directly. I will remember up to 20 messages of context in our conversation.\n` +
-        `• *Voice Reply (TTS):* Include \`vo:\` in your message (e.g., \`vo: Hello!\`) to receive a voice response generated via Gemini 3.1 Flash TTS.\n` +
+        `• *Voice Reply (TTS):* Include \`vo:\` in your message (e.g., \`vo: Hello!\`) to receive a voice response generated via Gemini 2.5 Flash Native Audio Dialog.\n` +
         `• */reset:* Clears our conversation history so we can start fresh.\n` +
         `• */model:* Displays the currently active model. To change the model, type \`/model <model_name>\` (e.g. \`/model gemini-3.5-flash-low\`).\n` +
         `• */status:* Shows configuration details, such as the Proxy URL, current model, and count of messages in your active session history.\n` +
@@ -551,23 +551,28 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
         }
       }
 
-      // Call CLI Proxy API
+      if (isVoiceRequested) {
+        activeSystemPrompt += "\n\nCRITICAL VOICE FORMATTING INSTRUCTION: You are generating a text response that will be spoken aloud as a voice note. Format your output into short, clear, complete sentences. End every sentence explicitly with proper punctuation (period '.', question mark '?', exclamation mark '!', or Khmer '។'). Keep paragraphs concise (2-3 sentences max). Avoid markdown lists, bullet points, tables, code blocks, or ASCII symbols so each sentence is self-contained and easily chunked without losing meaning or context.";
+      }
+
+      // 1. Call CLI Proxy API for search-grounded text completion
       const result = await proxyClient.getChatCompletion(history, userPromptPayload, activeModel, activeSystemPrompt);
 
       // Save user prompt & assistant response to session history
       sessionManager.addMessage(chatId, 'user', historyUserText);
       sessionManager.addMessage(chatId, 'assistant', result.content);
 
-      // Send reply (as voice note if vo: pattern was matched, or text otherwise)
+      // 2. Send reply (as voice note via Gemini Live API WebSocket if vo: pattern was matched, or text otherwise)
       const replyOptions = isGroup ? { reply_to_message_id: ctx.message.message_id } : {};
 
       if (isVoiceRequested) {
         try {
           await ctx.sendChatAction('record_voice');
+          console.log(`${pc.gray(`[${new Date().toLocaleTimeString()}]`)} ${pc.blue('🎙️ Submitting search-grounded result text to Gemini Live API WebSocket...')}`);
           const audioBuffer = await generateTTS(result.content, null, refreshToken);
           await ctx.replyWithVoice({ source: audioBuffer, filename: 'voice.ogg' }, replyOptions);
         } catch (ttsErr) {
-          console.error(`${pc.red('Error generating voice TTS reply:')}`, ttsErr);
+          console.error(`${pc.red('Error generating voice TTS reply via Live API:')}`, ttsErr);
           await ctx.reply(result.content, replyOptions);
         }
       } else {
@@ -579,7 +584,7 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
       const compTok = result.usage.completion_tokens;
       console.log(
         `${pc.gray(`[${new Date().toLocaleTimeString()}]`)} ` +
-        `${pc.blue(`🤖 Reply${isVoiceRequested ? ' (Voice TTS)' : ''}:`)} Model=${pc.cyan(result.model)} ` +
+        `${pc.blue('🤖 Reply:')} Model=${pc.cyan(result.model)} ` +
         `Tokens=${pc.gray(`${promptTok}p+${compTok}c=${result.usage.total_tokens}`)}`
       );
     } catch (err) {
@@ -720,14 +725,18 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
         }
       }
 
-      // Call CLI Proxy API
+      if (isVoiceRequested) {
+        activeSystemPrompt += "\n\nCRITICAL VOICE FORMATTING INSTRUCTION: You are generating a text response that will be spoken aloud as a voice note. Format your output into short, clear, complete sentences. End every sentence explicitly with proper punctuation (period '.', question mark '?', exclamation mark '!', or Khmer '។'). Keep paragraphs concise (2-3 sentences max). Avoid markdown lists, bullet points, tables, code blocks, or ASCII symbols so each sentence is self-contained and easily chunked without losing meaning or context.";
+      }
+
+      // Call CLI Proxy API for search-grounded text completion
       const result = await proxyClient.getChatCompletion(history, userPromptPayload, activeModel, activeSystemPrompt);
 
       // Save user text representation (without base64 bloat) & assistant response to session history
       sessionManager.addMessage(chatId, 'user', historyUserText);
       sessionManager.addMessage(chatId, 'assistant', result.content);
 
-      // Send reply (as voice note if vo: pattern was matched, or text otherwise)
+      // Send reply (as voice note via Gemini Live API WebSocket if vo: pattern was matched, or text otherwise)
       const replyOptions = isGroup ? { reply_to_message_id: ctx.message.message_id } : {};
 
       if (isVoiceRequested) {
@@ -895,6 +904,10 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
           const level = sessionManager.getAggressiveLevel(chatId);
           activeSystemPrompt = getSystemPromptForLevel(level);
         }
+      }
+
+      if (isVoiceRequested) {
+        activeSystemPrompt += "\n\nCRITICAL VOICE FORMATTING INSTRUCTION: You are generating a text response that will be spoken aloud as a voice note. Format your output into short, clear, complete sentences. End every sentence explicitly with proper punctuation (period '.', question mark '?', exclamation mark '!', or Khmer '។'). Keep paragraphs concise (2-3 sentences max). Avoid markdown lists, bullet points, tables, code blocks, or ASCII symbols so each sentence is self-contained and easily chunked without losing meaning or context.";
       }
 
       // Call CLI Proxy API
