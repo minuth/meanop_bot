@@ -83,6 +83,19 @@ async function downloadTelegramAudio(ctx, audioObj) {
 }
 
 /**
+ * Helper to format user-friendly bot error messages for API issues (e.g. 429 quota exhaustion).
+ * @param {Error} err
+ * @param {string} [context]
+ * @returns {string}
+ */
+function formatBotErrorMessage(err, context = '') {
+  if (err.message && (err.message.includes('429') || err.message.includes('RESOURCE_EXHAUSTED'))) {
+    return `⚠️ **Antigravity AI Quota Exhausted**\n\nThe Google account free-tier quota is currently exhausted (HTTP 429). The quota resets automatically.\n\n👉 *To continue immediately:* Run \`npm run login\` in your terminal with another Google account.`;
+  }
+  return `❌ Oops! I had trouble ${context || 'reaching the AI brain'}. Details:\n${err.message}`;
+}
+
+/**
  * Helper to generate system prompts for a custom characteristic.
  * @param {string} characteristic
  * @returns {string} The customized system prompt
@@ -590,7 +603,7 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
     } catch (err) {
       console.error(`${pc.red('Error generating completion:')}`, err);
       await ctx.reply(
-        `❌ Oops! I had trouble reaching the AI brain. Details:\n${err.message}`,
+        formatBotErrorMessage(err, 'reaching the AI brain'),
         isGroup ? { reply_to_message_id: ctx.message.message_id } : {}
       );
     }
@@ -763,7 +776,7 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
     } catch (err) {
       console.error(`${pc.red('Error generating photo completion:')}`, err);
       await ctx.reply(
-        `❌ Oops! I had trouble analyzing the image. Details:\n${err.message}`,
+        formatBotErrorMessage(err, 'analyzing the image'),
         isGroup ? { reply_to_message_id: ctx.message.message_id } : {}
       );
     }
@@ -945,7 +958,7 @@ export function createBot({ telegramToken, refreshToken, proxyUrl, proxyKey, mod
     } catch (err) {
       console.error(`${pc.red(`Error generating ${isVoice ? 'voice' : 'audio'} completion:`)}`, err);
       await ctx.reply(
-        `❌ Oops! I had trouble processing the ${isVoice ? 'voice' : 'audio'} message. Details:\n${err.message}`,
+        formatBotErrorMessage(err, `processing the ${isVoice ? 'voice' : 'audio'} message`),
         isGroup ? { reply_to_message_id: ctx.message.message_id } : {}
       );
     }

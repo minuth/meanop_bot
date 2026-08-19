@@ -82,7 +82,7 @@ export function detectLanguage(text) {
  * @param {string} [systemInstruction]
  * @returns {Promise<Buffer|null>} Raw PCM buffer for chunk
  */
-async function generateGeminiLiveAudioChunk(chunkText, apiKey, systemInstruction) {
+async function generateGeminiLiveAudioChunkOnce(chunkText, apiKey, systemInstruction) {
   if (typeof WebSocket === 'undefined') return null;
 
   return new Promise((resolve) => {
@@ -207,6 +207,23 @@ async function generateGeminiLiveAudioChunk(chunkText, apiKey, systemInstruction
       safeResolve(null);
     }
   });
+}
+
+/**
+ * Synthesize a single chunk of text with 1 retry.
+ * @param {string} chunkText
+ * @param {string} apiKey
+ * @param {string} [systemInstruction]
+ * @returns {Promise<Buffer|null>}
+ */
+async function generateGeminiLiveAudioChunk(chunkText, apiKey, systemInstruction) {
+  let pcm = await generateGeminiLiveAudioChunkOnce(chunkText, apiKey, systemInstruction);
+  if (!pcm) {
+    // Retry once on failure
+    await new Promise((r) => setTimeout(r, 400));
+    pcm = await generateGeminiLiveAudioChunkOnce(chunkText, apiKey, systemInstruction);
+  }
+  return pcm;
 }
 
 /**

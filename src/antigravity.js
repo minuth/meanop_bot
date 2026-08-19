@@ -2,13 +2,16 @@
  * Pure functions and core engine for embedded Google Antigravity API integration.
  */
 
+import crypto from 'node:crypto';
+
 export const CONFIG = {
   CLIENT_ID: "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com",
   CLIENT_SECRET: "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",
   TOKEN_ENDPOINT: "https://oauth2.googleapis.com/token",
-  BASE_URL: "https://cloudcode-pa.googleapis.com",
+  BASE_URL: "https://daily-cloudcode-pa.googleapis.com",
   USER_AGENT: "antigravity/hub/2.2.1 darwin/arm64",
   LOAD_CODE_ASSIST_PATH: "/v1internal:loadCodeAssist",
+  ONBOARD_USER_PATH: "/v1internal:onboardUser",
   FETCH_MODELS_PATH: "/v1internal:fetchAvailableModels",
   GENERATE_CONTENT_PATH: "/v1internal:generateContent"
 };
@@ -52,6 +55,7 @@ export async function refreshAccessToken(refreshToken) {
 
 /**
  * Fetch Google Cloud Code project ID using the access token.
+ * Automatically onboards new users to the free tier if no project ID is provisioned.
  * @param {string} accessToken
  * @returns {Promise<string>}
  */
@@ -73,12 +77,59 @@ export async function fetchProjectId(accessToken) {
   }
 
   const data = await res.json();
-  return (
+  let projectId = (
     data.cloudaicompanionProject ||
     data.projectId ||
     data.project?.id ||
     ""
   );
+
+  if (!projectId) {
+    let tierId = "free-tier";
+    if (Array.isArray(data.allowedTiers)) {
+      for (const tier of data.allowedTiers) {
+        if (tier?.isDefault && tier?.id) {
+          tierId = tier.id;
+          break;
+        }
+      }
+    } else if (data.currentTier?.id) {
+      tierId = data.currentTier.id;
+    }
+
+    try {
+      const onboardRes = await fetch(`${CONFIG.BASE_URL}${CONFIG.ONBOARD_USER_PATH}`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+          "User-Agent": CONFIG.USER_AGENT
+        },
+        body: JSON.stringify({
+          tier_id: tierId,
+          metadata: {
+            ide_type: "ANTIGRAVITY",
+            ide_name: "antigravity",
+            ide_version: "2.2.1"
+          }
+        })
+      });
+
+      if (onboardRes.ok) {
+        const onboardData = await onboardRes.json();
+        projectId = (
+          onboardData.response?.cloudaicompanionProject?.id ||
+          (typeof onboardData.response?.cloudaicompanionProject === "string" ? onboardData.response.cloudaicompanionProject : "") ||
+          onboardData.response?.projectId ||
+          ""
+        );
+      }
+    } catch {
+      // Fallback silently if onboarding fails
+    }
+  }
+
+  return projectId;
 }
 
 /**
@@ -223,14 +274,21 @@ export function openAIToAntigravity(body, projectId = "") {
     };
   }
 
+  const requestId = `agent-${crypto.randomUUID()}`;
+  const sessionId = `-${Math.floor(Math.random() * 9e15)}`;
+
   return {
     project: projectId,
     model: model,
     request: {
       contents,
+      sessionId,
       ...(systemInstruction ? { systemInstruction } : {}),
       ...(Object.keys(generationConfig).length > 0 ? { generationConfig } : {})
-    }
+    },
+    userAgent: "antigravity",
+    requestType: "agent",
+    requestId
   };
 }
 
