@@ -8,7 +8,7 @@ function getBot(env) {
     botInstance = createBot({
       telegramToken: env.TELEGRAM_BOT_TOKEN,
       refreshToken: env.ANTIGRAVITY_REFRESH_TOKEN,
-      model: env.MODEL || 'gemini-3.5-flash-low',
+      model: env.MODEL || 'gemini-3.8-flash-tiered',
       systemPrompt: env.SYSTEM_PROMPT,
       allowedUsers: env.ALLOWED_USERS || '',
       boss: env.BOSS || '',

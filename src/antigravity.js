@@ -191,11 +191,19 @@ export async function fetchAvailableModels(accessToken) {
     if (Array.isArray(data.commandModelIds)) {
       for (const m of data.commandModelIds) modelSet.add(m);
     }
-    if (Array.isArray(data.models)) {
-      for (const m of data.models) {
-        if (typeof m === "string") modelSet.add(m);
-        else if (m.id) modelSet.add(m.id);
-        else if (m.name) modelSet.add(m.name);
+    if (data.models && typeof data.models === "object") {
+      if (Array.isArray(data.models)) {
+        for (const m of data.models) {
+          if (typeof m === "string") modelSet.add(m);
+          else if (m.id) modelSet.add(m.id);
+          else if (m.name) modelSet.add(m.name);
+        }
+      } else {
+        for (const [key, m] of Object.entries(data.models)) {
+          if (m?.apiProvider && m.apiProvider !== "API_PROVIDER_INTERNAL" && !key.startsWith("tab_")) {
+            modelSet.add(key);
+          }
+        }
       }
     }
 
@@ -212,14 +220,22 @@ export async function fetchAvailableModels(accessToken) {
  * @returns {object}
  */
 export function openAIToAntigravity(body, projectId = "") {
-  const modelInput = body.model || "gemini-3.5-flash-low";
+  const modelInput = body.model || "gemini-3.8-flash-tiered";
   let model = modelInput;
   let thinkingLevel;
 
   const match = String(modelInput).match(/^(.+?)\s*\((low|medium|high|xhigh|max|minimal|none|auto|\d+)\)$/i);
   if (match) {
-    model = `${match[1].trim()}-${match[2].toLowerCase()}`;
+    model = match[1].trim();
     thinkingLevel = match[2].toLowerCase();
+  }
+
+  const tieredMatch = String(model).match(/^gemini-3\.8-flash-(low|medium|high)$/i);
+  if (tieredMatch) {
+    model = "gemini-3.8-flash-tiered";
+    thinkingLevel = tieredMatch[1].toLowerCase();
+  } else if (model.toLowerCase() === "gemini-3.8-flash") {
+    model = "gemini-3.8-flash-tiered";
   }
 
   const contents = [];
